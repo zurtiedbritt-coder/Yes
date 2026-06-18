@@ -1,10 +1,36 @@
 local Players = game:GetService("Players")
 local UserInputService = game:GetService("UserInputService")
 local RunService = game:GetService("RunService")
+local TweenService = game:GetService("TweenService")
+local Workspace = game:GetService("Workspace")
 local player = Players.LocalPlayer
+local camera = Workspace.CurrentCamera
 
 -- ===== Config =====
-local VALID_KEY = "Free"
+local VALID_KEYS = {"Free","BrayIsGay"} -- Multiple valid keys
+local AIMBOT_KEYBIND = Enum.KeyCode.Q -- Change this to your preferred key
+local AIMBOT_SMOOTHNESS = 0.15 -- Lower = snappier (0.05 = glue-like), Higher = smoother
+local AIMBOT_FOV = 250 -- Field of view radius for target selection
+local AIMBOT_WALL_CHECK = true -- Check if target is visible through walls
+
+-- ===== Summer / Aloha palette =====
+local THEME = {
+    SunTop = Color3.fromRGB(255, 170, 60),
+    SunBottom = Color3.fromRGB(255, 120, 40),
+    SeaTop = Color3.fromRGB(60, 170, 220),
+    SeaBottom = Color3.fromRGB(30, 110, 180),
+    Sand = Color3.fromRGB(250, 240, 215),
+    Accent = Color3.fromRGB(255, 140, 50),
+    AccentHover = Color3.fromRGB(255, 165, 80),
+    AccentDown = Color3.fromRGB(225, 110, 30),
+    Field = Color3.fromRGB(235, 248, 255),
+    Text = Color3.fromRGB(255, 255, 255),
+    DarkText = Color3.fromRGB(20, 55, 80),
+    SubText = Color3.fromRGB(235, 245, 250),
+    Danger = Color3.fromRGB(225, 80, 80),
+    Good = Color3.fromRGB(90, 200, 120),
+    Bad = Color3.fromRGB(230, 90, 90),
+}
 
 -- ScreenGui (shared)
 local screenGui = Instance.new("ScreenGui")
@@ -13,285 +39,601 @@ screenGui.ResetOnSpawn = false
 screenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 screenGui.Parent = player:WaitForChild("PlayerGui")
 
+-- FOV Circle for Aimbot
+local fovCircle = Instance.new("Frame")
+fovCircle.Name = "FOVCircle"
+fovCircle.Size = UDim2.fromOffset(AIMBOT_FOV * 2, AIMBOT_FOV * 2)
+fovCircle.Position = UDim2.new(0.5, -AIMBOT_FOV, 0.5, -AIMBOT_FOV)
+fovCircle.BackgroundTransparency = 1
+fovCircle.BorderSizePixel = 0
+fovCircle.Visible = false
+fovCircle.Parent = screenGui
+
+local fovCircleUI = Instance.new("UICorner")
+fovCircleUI.CornerRadius = UDim.new(1, 0)
+fovCircleUI.Parent = fovCircle
+
+local fovStroke = Instance.new("UIStroke")
+fovStroke.Color = THEME.Accent
+fovStroke.Thickness = 2
+fovStroke.Transparency = 0.5
+fovStroke.Parent = fovCircle
+
+-- ===== Styling helpers =====
+local function addCorner(parent, radius)
+    local c = Instance.new("UICorner")
+    c.CornerRadius = UDim.new(0, radius or 8)
+    c.Parent = parent
+    return c
+end
+
+local function addGradient(parent, topColor, bottomColor, rotation)
+    local g = Instance.new("UIGradient")
+    g.Color = ColorSequence.new(topColor, bottomColor)
+    g.Rotation = rotation or 90
+    g.Parent = parent
+    return g
+end
+
+local function addStroke(parent, color, thickness, transparency)
+    local s = Instance.new("UIStroke")
+    s.Color = color or THEME.Sand
+    s.Thickness = thickness or 1
+    s.Transparency = transparency or 0.5
+    s.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+    s.Parent = parent
+    return s
+end
+
+-- Hover/press color tweens for buttons
+local function wireButtonTweens(btn, base, hover, down)
+    local info = TweenInfo.new(0.12, Enum.EasingStyle.Quad)
+    btn.MouseEnter:Connect(function()
+        TweenService:Create(btn, info, {BackgroundColor3 = hover}):Play()
+    end)
+    btn.MouseLeave:Connect(function()
+        TweenService:Create(btn, info, {BackgroundColor3 = base}):Play()
+    end)
+    btn.MouseButton1Down:Connect(function()
+        TweenService:Create(btn, info, {BackgroundColor3 = down}):Play()
+    end)
+    btn.MouseButton1Up:Connect(function()
+        TweenService:Create(btn, info, {BackgroundColor3 = hover}):Play()
+    end)
+end
+
 -- ===== Reusable drag helper =====
 local function makeDraggable(frame, dragHandle)
-	local dragging, dragStart, startPos
+    local dragging, dragStart, startPos
 
-	dragHandle.InputBegan:Connect(function(input)
-		if input.UserInputType == Enum.UserInputType.MouseButton1
-			or input.UserInputType == Enum.UserInputType.Touch then
-			dragging = true
-			dragStart = input.Position
-			startPos = frame.Position
-			input.Changed:Connect(function()
-				if input.UserInputState == Enum.UserInputState.End then
-					dragging = false
-				end
-			end)
-		end
-	end)
+    dragHandle.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1
+            or input.UserInputType == Enum.UserInputType.Touch then
+            dragging = true
+            dragStart = input.Position
+            startPos = frame.Position
+            input.Changed:Connect(function()
+                if input.UserInputState == Enum.UserInputState.End then
+                    dragging = false
+                end
+            end)
+        end
+    end)
 
-	UserInputService.InputChanged:Connect(function(input)
-		if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement
-			or input.UserInputType == Enum.UserInputType.Touch) then
-			local delta = input.Position - dragStart
-			frame.Position = UDim2.new(
-				startPos.X.Scale, startPos.X.Offset + delta.X,
-				startPos.Y.Scale, startPos.Y.Offset + delta.Y
-			)
-		end
-	end)
+    UserInputService.InputChanged:Connect(function(input)
+        if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement
+            or input.UserInputType == Enum.UserInputType.Touch) then
+            local delta = input.Position - dragStart
+            frame.Position = UDim2.new(
+                startPos.X.Scale, startPos.X.Offset + delta.X,
+                startPos.Y.Scale, startPos.Y.Offset + delta.Y
+            )
+        end
+    end)
 end
+
+-- ===== Aimbot Functions =====
+local aimbotActive = false
+local aimbotTarget = nil
+
+local function isVisible(targetPart)
+    if not AIMBOT_WALL_CHECK then return true end
+    local origin = camera.CFrame.Position
+    local direction = (targetPart.Position - origin).Unit
+    local distance = (targetPart.Position - origin).Magnitude
+    
+    local raycastParams = RaycastParams.new()
+    raycastParams.FilterDescendantsInstances = {player.Character}
+    raycastParams.FilterType = Enum.RaycastFilterType.Blacklist
+    
+    local result = Workspace:Raycast(origin, direction * distance, raycastParams)
+    if result then
+        return result.Instance:IsDescendantOf(targetPart.Parent)
+    end
+    return true
+end
+
+local function getClosestPlayerToCursor()
+    local closestPlayer = nil
+    local shortestDistance = AIMBOT_FOV
+    
+    for _, otherPlayer in ipairs(Players:GetPlayers()) do
+        if otherPlayer ~= player and otherPlayer.Character then
+            local humanoid = otherPlayer.Character:FindFirstChild("Humanoid")
+            local head = otherPlayer.Character:FindFirstChild("Head")
+            local root = otherPlayer.Character:FindFirstChild("HumanoidRootPart")
+            
+            if humanoid and humanoid.Health > 0 and head and root then
+                local screenPos, onScreen = camera:WorldToViewportPoint(head.Position)
+                if onScreen then
+                    local mousePos = UserInputService:GetMouseLocation()
+                    local distance = (Vector2.new(screenPos.X, screenPos.Y) - mousePos).Magnitude
+                    
+                    if distance < shortestDistance and isVisible(head) then
+                        shortestDistance = distance
+                        closestPlayer = otherPlayer
+                    end
+                end
+            end
+        end
+    end
+    
+    return closestPlayer
+end
+
+local function aimAt(target)
+    if not target or not target.Character then return end
+    
+    local head = target.Character:FindFirstChild("Head")
+    if not head then return end
+    
+    local targetPos = head.Position
+    local currentCFrame = camera.CFrame
+    local targetDirection = (targetPos - currentCFrame.Position).Unit
+    
+    -- Smooth aim (glue-like when smoothness is low)
+    local newCFrame = CFrame.new(currentCFrame.Position, currentCFrame.Position + targetDirection)
+    camera.CFrame = currentCFrame:Lerp(newCFrame, 1 - AIMBOT_SMOOTHNESS)
+end
+
+-- Aimbot loop
+RunService.RenderStepped:Connect(function()
+    if aimbotActive then
+        if not aimbotTarget or not aimbotTarget.Character then
+            aimbotTarget = getClosestPlayerToCursor()
+        end
+        
+        -- Check if target is still valid
+        if aimbotTarget and aimbotTarget.Character then
+            local humanoid = aimbotTarget.Character:FindFirstChild("Humanoid")
+            local head = aimbotTarget.Character:FindFirstChild("Head")
+            
+            if humanoid and humanoid.Health > 0 and head then
+                local screenPos = camera:WorldToViewportPoint(head.Position)
+                local mousePos = UserInputService:GetMouseLocation()
+                local distance = (Vector2.new(screenPos.X, screenPos.Y) - mousePos).Magnitude
+                
+                -- Switch target if current is too far or dead
+                if distance > AIMBOT_FOV * 1.5 or not isVisible(head) then
+                    aimbotTarget = getClosestPlayerToCursor()
+                else
+                    aimAt(aimbotTarget)
+                end
+            else
+                aimbotTarget = getClosestPlayerToCursor()
+            end
+        end
+        
+        fovCircle.Visible = true
+    else
+        aimbotTarget = nil
+        fovCircle.Visible = false
+    end
+end)
+
+-- Keybind handling
+UserInputService.InputBegan:Connect(function(input, gameProcessed)
+    if gameProcessed then return end
+    if input.KeyCode == AIMBOT_KEYBIND then
+        aimbotActive = not aimbotActive
+    end
+end)
 
 -- ============================================================
 -- MAIN FLING UI
 -- ============================================================
 local function buildMainUI()
-	local main = Instance.new("Frame")
-	main.Name = "Main"
-	main.Size = UDim2.fromOffset(400, 280)
-	main.Position = UDim2.new(0.5, -200, 0.5, -140)
-	main.BackgroundColor3 = Color3.fromRGB(30, 30, 35)
-	main.BorderSizePixel = 0
-	main.Active = true
-	main.Parent = screenGui
+    -- Main window (taller to fit aimbot controls)
+    local main = Instance.new("Frame")
+    main.Name = "Main"
+    main.Size = UDim2.fromOffset(400, 420)
+    main.Position = UDim2.new(0.5, -200, 0.5, -210)
+    main.BackgroundColor3 = THEME.SeaTop
+    main.BorderSizePixel = 0
+    main.Active = true
+    main.Parent = screenGui
+    addCorner(main, 10)
+    addGradient(main, THEME.SeaTop, THEME.SeaBottom)
+    addStroke(main, THEME.Sand, 1.5, 0.4)
 
-	local mainCorner = Instance.new("UICorner")
-	mainCorner.CornerRadius = UDim.new(0, 8)
-	mainCorner.Parent = main
+    -- Title bar
+    local titleBar = Instance.new("Frame")
+    titleBar.Name = "TitleBar"
+    titleBar.Size = UDim2.new(1, 0, 0, 38)
+    titleBar.BackgroundColor3 = THEME.SunTop
+    titleBar.BorderSizePixel = 0
+    titleBar.Active = true
+    titleBar.Parent = main
+    addCorner(titleBar, 10)
+    addGradient(titleBar, THEME.SunTop, THEME.SunBottom)
 
-	local titleBar = Instance.new("Frame")
-	titleBar.Name = "TitleBar"
-	titleBar.Size = UDim2.new(1, 0, 0, 36)
-	titleBar.BackgroundColor3 = Color3.fromRGB(40, 40, 48)
-	titleBar.BorderSizePixel = 0
-	titleBar.Active = true
-	titleBar.Parent = main
+    local titleText = Instance.new("TextLabel")
+    titleText.Size = UDim2.new(1, -52, 1, 0)
+    titleText.Position = UDim2.fromOffset(12, 0)
+    titleText.BackgroundTransparency = 1
+    titleText.Text = "🌺 Aloha — newsupraaa's paid lua 🌴"
+    titleText.TextColor3 = THEME.Text
+    titleText.TextXAlignment = Enum.TextXAlignment.Left
+    titleText.Font = Enum.Font.GothamBold
+    titleText.TextSize = 16
+    titleText.Parent = titleBar
 
-	local titleCorner = Instance.new("UICorner")
-	titleCorner.CornerRadius = UDim.new(0, 8)
-	titleCorner.Parent = titleBar
+    -- Close (X) button
+    local closeButton = Instance.new("TextButton")
+    closeButton.Name = "CloseButton"
+    closeButton.Size = UDim2.fromOffset(30, 30)
+    closeButton.Position = UDim2.new(1, -36, 0.5, -15)
+    closeButton.BackgroundColor3 = THEME.Danger
+    closeButton.Text = "X"
+    closeButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+    closeButton.Font = Enum.Font.GothamBold
+    closeButton.TextSize = 15
+    closeButton.AutoButtonColor = true
+    closeButton.Parent = titleBar
+    addCorner(closeButton, 6)
 
-	local titleText = Instance.new("TextLabel")
-	titleText.Size = UDim2.new(1, -52, 1, 0)
-	titleText.Position = UDim2.fromOffset(12, 0)
-	titleText.BackgroundTransparency = 1
-	titleText.Text = "newsupraaa's paid lua"
-	titleText.TextColor3 = Color3.fromRGB(235, 235, 240)
-	titleText.TextXAlignment = Enum.TextXAlignment.Left
-	titleText.Font = Enum.Font.GothamMedium
-	titleText.TextSize = 16
-	titleText.Parent = titleBar
+    -- Content container with auto-layout
+    local content = Instance.new("Frame")
+    content.Name = "Content"
+    content.Size = UDim2.new(1, -24, 1, -50)
+    content.Position = UDim2.fromOffset(12, 46)
+    content.BackgroundTransparency = 1
+    content.Parent = main
 
-	local closeButton = Instance.new("TextButton")
-	closeButton.Name = "CloseButton"
-	closeButton.Size = UDim2.fromOffset(28, 28)
-	closeButton.Position = UDim2.new(1, -32, 0.5, -14)
-	closeButton.BackgroundColor3 = Color3.fromRGB(220, 70, 70)
-	closeButton.Text = "X"
-	closeButton.TextColor3 = Color3.fromRGB(255, 255, 255)
-	closeButton.Font = Enum.Font.GothamBold
-	closeButton.TextSize = 15
-	closeButton.AutoButtonColor = true
-	closeButton.Parent = titleBar
+    local layout = Instance.new("UIListLayout")
+    layout.Padding = UDim.new(0, 8)
+    layout.SortOrder = Enum.SortOrder.LayoutOrder
+    layout.Parent = content
 
-	local closeCorner = Instance.new("UICorner")
-	closeCorner.CornerRadius = UDim.new(0, 6)
-	closeCorner.Parent = closeButton
+    -- Helper to make a button
+    local function makeButton(text, order)
+        local btn = Instance.new("TextButton")
+        btn.Size = UDim2.new(1, 0, 0, 38)
+        btn.LayoutOrder = order
+        btn.BackgroundColor3 = THEME.Accent
+        btn.Text = text
+        btn.TextColor3 = THEME.Text
+        btn.Font = Enum.Font.GothamBold
+        btn.TextSize = 15
+        btn.AutoButtonColor = false
+        btn.Parent = content
+        addCorner(btn, 6)
+        addStroke(btn, THEME.Sand, 1, 0.6)
+        wireButtonTweens(btn, THEME.Accent, THEME.AccentHover, THEME.AccentDown)
+        return btn
+    end
 
-	local content = Instance.new("Frame")
-	content.Name = "Content"
-	content.Size = UDim2.new(1, -24, 1, -48)
-	content.Position = UDim2.fromOffset(12, 44)
-	content.BackgroundTransparency = 1
-	content.Parent = main
+    local offButton = makeButton("☀️ OFF", 1)
+    local onButton = makeButton("🌊 ON", 2)
+    local orbitButton = makeButton("🛰️ Orbit Nearest", 3)
+    
+    -- Separator
+    local separator = Instance.new("Frame")
+    separator.Size = UDim2.new(1, 0, 0, 2)
+    separator.LayoutOrder = 4
+    separator.BackgroundColor3 = THEME.Sand
+    separator.BackgroundTransparency = 0.5
+    separator.BorderSizePixel = 0
+    separator.Parent = content
+    
+    -- Aimbot section label
+    local aimbotLabel = Instance.new("TextLabel")
+    aimbotLabel.Size = UDim2.new(1, 0, 0, 20)
+    aimbotLabel.LayoutOrder = 5
+    aimbotLabel.BackgroundTransparency = 1
+    aimbotLabel.Text = "🎯 AIMBOT (Key: " .. tostring(AIMBOT_KEYBIND):gsub("Enum.KeyCode.", "") .. ")"
+    aimbotLabel.TextColor3 = THEME.Text
+    aimbotLabel.Font = Enum.Font.GothamBold
+    aimbotLabel.TextSize = 14
+    aimbotLabel.Parent = content
+    
+    local aimbotStatus = makeButton("🎯 Aimbot: OFF", 6)
+    local aimbotSmoothLabel = Instance.new("TextLabel")
+    aimbotSmoothLabel.Size = UDim2.new(1, 0, 0, 20)
+    aimbotSmoothLabel.LayoutOrder = 7
+    aimbotSmoothLabel.BackgroundTransparency = 1
+    aimbotSmoothLabel.Text = "Smoothness: " .. tostring(AIMBOT_SMOOTHNESS)
+    aimbotSmoothLabel.TextColor3 = THEME.SubText
+    aimbotSmoothLabel.Font = Enum.Font.Gotham
+    aimbotSmoothLabel.TextSize = 12
+    aimbotSmoothLabel.Parent = content
 
-	local layout = Instance.new("UIListLayout")
-	layout.Padding = UDim.new(0, 8)
-	layout.SortOrder = Enum.SortOrder.LayoutOrder
-	layout.Parent = content
+    -- ===== Fling logic =====
+    local savedCFrame = nil
+    local flinging = false
+    local LOOP_INTERVAL = 0.1
+    local MAX_SAFE_VELOCITY = 1e8
 
-	local function makeButton(text, order)
-		local btn = Instance.new("TextButton")
-		btn.Size = UDim2.new(1, 0, 0, 38)
-		btn.LayoutOrder = order
-		btn.BackgroundColor3 = Color3.fromRGB(88, 101, 242)
-		btn.Text = text
-		btn.TextColor3 = Color3.fromRGB(255, 255, 255)
-		btn.Font = Enum.Font.GothamMedium
-		btn.TextSize = 15
-		btn.AutoButtonColor = true
-		btn.Parent = content
+    local function getRoot()
+        local character = player.Character
+        if not character then return nil end
+        return character:FindFirstChild("HumanoidRootPart")
+    end
 
-		local c = Instance.new("UICorner")
-		c.CornerRadius = UDim.new(0, 6)
-		c.Parent = btn
+    local function flingOnce()
+        local root = getRoot()
+        if not root then return end
+        local angle = math.random() * math.pi * 2
+        local dir = Vector3.new(math.cos(angle), 0.2, math.sin(angle)).Unit
+        root.AssemblyLinearVelocity = dir * MAX_SAFE_VELOCITY
+    end
 
-		return btn
-	end
+    local function startFling()
+        if flinging then return end
+        local root = getRoot()
+        if not root then return end
+        flinging = true
+        savedCFrame = root.CFrame
 
-	local offButton = makeButton("OFF", 1)
-	local onButton = makeButton("ON", 2)
+        task.spawn(function()
+            while flinging do
+                flingOnce()
+                task.wait(LOOP_INTERVAL)
+            end
+        end)
+    end
 
-	-- ===== Fling logic =====
-	local savedCFrame = nil
-	local flinging = false
-	local LOOP_INTERVAL = 0.1
-	local MAX_SAFE_VELOCITY = 1e8
+    local function stopFling()
+        flinging = false
+        local root = getRoot()
+        if root then
+            root.AssemblyLinearVelocity = Vector3.zero
+            if savedCFrame then
+                root.CFrame = savedCFrame
+            end
+        end
+    end
 
-	local function getRoot()
-		local character = player.Character
-		if not character then return nil end
-		return character:FindFirstChild("HumanoidRootPart")
-	end
+    -- ===== Orbit logic =====
+    local orbiting = false
+    local orbitConn = nil
+    local ORBIT_OFFSET = Vector3.new(5, 1, 5)
+    local ORBIT_SPEED = 2.5
+    local orbitAngle = 0
 
-	local function flingOnce()
-		local root = getRoot()
-		if not root then return end
-		local angle = math.random() * math.pi * 2
-		local dir = Vector3.new(math.cos(angle), 0.2, math.sin(angle)).Unit
-		root.AssemblyLinearVelocity = dir * MAX_SAFE_VELOCITY
-	end
+    local function getNearestRoot()
+        local myRoot = getRoot()
+        if not myRoot then return nil end
 
-	local function startFling()
-		if flinging then return end
-		local root = getRoot()
-		if not root then return end
-		flinging = true
-		savedCFrame = root.CFrame
-		task.spawn(function()
-			while flinging do
-				flingOnce()
-				task.wait(LOOP_INTERVAL)
-			end
-		end)
-	end
+        local closest, closestDist = nil, math.huge
+        for _, other in ipairs(Players:GetPlayers()) do
+            if other ~= player and other.Character then
+                local oRoot = other.Character:FindFirstChild("HumanoidRootPart")
+                if oRoot then
+                    local dist = (oRoot.Position - myRoot.Position).Magnitude
+                    if dist < closestDist then
+                        closest, closestDist = oRoot, dist
+                    end
+                end
+            end
+        end
+        return closest
+    end
 
-	local function stopFling()
-		flinging = false
-		local root = getRoot()
-		if root then
-			root.AssemblyLinearVelocity = Vector3.zero
-			if savedCFrame then
-				root.CFrame = savedCFrame
-			end
-		end
-	end
+    local function startOrbit()
+        if orbiting then return end
+        local root = getRoot()
+        if not root then return end
+        orbiting = true
+        root.AssemblyLinearVelocity = Vector3.zero
 
-	onButton.MouseButton1Click:Connect(startFling)
-	offButton.MouseButton1Click:Connect(stopFling)
-	closeButton.MouseButton1Click:Connect(function()
-		stopFling()
-		screenGui:Destroy()
-	end)
+        orbitConn = RunService.Heartbeat:Connect(function(dt)
+            local myRoot = getRoot()
+            local target = getNearestRoot()
+            if not myRoot or not target then return end
 
-	makeDraggable(main, titleBar)
+            orbitAngle = orbitAngle + ORBIT_SPEED * dt
+            local r = math.sqrt(ORBIT_OFFSET.X ^ 2 + ORBIT_OFFSET.Z ^ 2)
+            local offsetX = math.cos(orbitAngle) * r
+            local offsetZ = math.sin(orbitAngle) * r
+            local offset = Vector3.new(offsetX, ORBIT_OFFSET.Y, offsetZ)
+
+            myRoot.AssemblyLinearVelocity = Vector3.zero
+            myRoot.CFrame = CFrame.lookAt(target.Position + offset, target.Position)
+        end)
+    end
+
+    local function stopOrbit()
+        orbiting = false
+        if orbitConn then
+            orbitConn:Disconnect()
+            orbitConn = nil
+        end
+        local root = getRoot()
+        if root then
+            root.AssemblyLinearVelocity = Vector3.zero
+        end
+    end
+
+    -- ===== Button wiring =====
+    offButton.MouseButton1Click:Connect(function()
+        stopFling()
+    end)
+
+    onButton.MouseButton1Click:Connect(function()
+        stopOrbit()
+        startFling()
+    end)
+
+    orbitButton.MouseButton1Click:Connect(function()
+        if orbiting then
+            stopOrbit()
+            orbitButton.Text = "🛰️ Orbit Nearest"
+        else
+            stopFling()
+            startOrbit()
+            orbitButton.Text = "🛰️ Orbiting… (click to stop)"
+        end
+    end)
+    
+    -- Aimbot button toggle
+    aimbotStatus.MouseButton1Click:Connect(function()
+        aimbotActive = not aimbotActive
+        if aimbotActive then
+            aimbotStatus.Text = "🎯 Aimbot: ON (Glue Mode)"
+            fovCircle.Visible = true
+        else
+            aimbotStatus.Text = "🎯 Aimbot: OFF"
+            fovCircle.Visible = false
+            aimbotTarget = nil
+        end
+    end)
+
+    closeButton.MouseButton1Click:Connect(function()
+        stopFling()
+        stopOrbit()
+        aimbotActive = false
+        fovCircle.Visible = false
+        main.Visible = false
+    end)
+
+    makeDraggable(main, titleBar)
+
+    return main
 end
 
 -- ============================================================
--- KEY SYSTEM
+-- KEY SYSTEM UI
 -- ============================================================
-local function buildKeyUI()
-	local keyFrame = Instance.new("Frame")
-	keyFrame.Name = "KeyFrame"
-	keyFrame.Size = UDim2.fromOffset(360, 200)
-	keyFrame.Position = UDim2.new(0.5, -180, 0.5, -100)
-	keyFrame.BackgroundColor3 = Color3.fromRGB(30, 30, 35)
-	keyFrame.BorderSizePixel = 0
-	keyFrame.Active = true
-	keyFrame.Parent = screenGui
+local function buildKeyUI(onValid)
+    local keyFrame = Instance.new("Frame")
+    keyFrame.Name = "KeyFrame"
+    keyFrame.Size = UDim2.fromOffset(340, 220)
+    keyFrame.Position = UDim2.new(0.5, -170, 0.5, -110)
+    keyFrame.BackgroundColor3 = THEME.SeaTop
+    keyFrame.BorderSizePixel = 0
+    keyFrame.Active = true
+    keyFrame.Parent = screenGui
+    addCorner(keyFrame, 10)
+    addGradient(keyFrame, THEME.SeaTop, THEME.SeaBottom)
+    addStroke(keyFrame, THEME.Sand, 1.5, 0.4)
 
-	local kCorner = Instance.new("UICorner")
-	kCorner.CornerRadius = UDim.new(0, 8)
-	kCorner.Parent = keyFrame
+    -- Title bar
+    local keyBar = Instance.new("Frame")
+    keyBar.Size = UDim2.new(1, 0, 0, 38)
+    keyBar.BackgroundColor3 = THEME.SunTop
+    keyBar.BorderSizePixel = 0
+    keyBar.Active = true
+    keyBar.Parent = keyFrame
+    addCorner(keyBar, 10)
+    addGradient(keyBar, THEME.SunTop, THEME.SunBottom)
 
-	local kBar = Instance.new("Frame")
-	kBar.Size = UDim2.new(1, 0, 0, 36)
-	kBar.BackgroundColor3 = Color3.fromRGB(40, 40, 48)
-	kBar.BorderSizePixel = 0
-	kBar.Active = true
-	kBar.Parent = keyFrame
+    local keyTitle = Instance.new("TextLabel")
+    keyTitle.Size = UDim2.new(1, -24, 1, 0)
+    keyTitle.Position = UDim2.fromOffset(12, 0)
+    keyTitle.BackgroundTransparency = 1
+    keyTitle.Text = "🔑 Enter Key"
+    keyTitle.TextColor3 = THEME.Text
+    keyTitle.TextXAlignment = Enum.TextXAlignment.Left
+    keyTitle.Font = Enum.Font.GothamBold
+    keyTitle.TextSize = 16
+    keyTitle.Parent = keyBar
 
-	local kBarCorner = Instance.new("UICorner")
-	kBarCorner.CornerRadius = UDim.new(0, 8)
-	kBarCorner.Parent = kBar
+    -- Key input box
+    local keyBox = Instance.new("TextBox")
+    keyBox.Size = UDim2.new(1, -24, 0, 38)
+    keyBox.Position = UDim2.fromOffset(12, 54)
+    keyBox.BackgroundColor3 = THEME.Field
+    keyBox.PlaceholderText = "Paste your key here…"
+    keyBox.Text = ""
+    keyBox.TextColor3 = THEME.DarkText
+    keyBox.PlaceholderColor3 = THEME.SubText
+    keyBox.Font = Enum.Font.Gotham
+    keyBox.TextSize = 14
+    keyBox.ClearTextOnFocus = false
+    keyBox.Parent = keyFrame
+    addCorner(keyBox, 6)
+    addStroke(keyBox, THEME.Sand, 1, 0.6)
+    
+    -- Valid keys hint
+    local keysHint = Instance.new("TextLabel")
+    keysHint.Size = UDim2.new(1, -24, 0, 20)
+    keysHint.Position = UDim2.fromOffset(12, 96)
+    keysHint.BackgroundTransparency = 1
+    keysHint.Text = "Valid keys: " .. table.concat(VALID_KEYS, ", ")
+    keysHint.TextColor3 = THEME.SubText
+    keysHint.Font = Enum.Font.Gotham
+    keysHint.TextSize = 11
+    keysHint.TextXAlignment = Enum.TextXAlignment.Left
+    keysHint.Parent = keyFrame
 
-	local kTitle = Instance.new("TextLabel")
-	kTitle.Size = UDim2.new(1, -24, 1, 0)
-	kTitle.Position = UDim2.fromOffset(12, 0)
-	kTitle.BackgroundTransparency = 1
-	kTitle.Text = "Key System"
-	kTitle.TextColor3 = Color3.fromRGB(235, 235, 240)
-	kTitle.TextXAlignment = Enum.TextXAlignment.Left
-	kTitle.Font = Enum.Font.GothamMedium
-	kTitle.TextSize = 16
-	kTitle.Parent = kBar
+    -- Submit button
+    local submit = Instance.new("TextButton")
+    submit.Size = UDim2.new(1, -24, 0, 38)
+    submit.Position = UDim2.fromOffset(12, 122)
+    submit.BackgroundColor3 = THEME.Accent
+    submit.Text = "🌊 Submit"
+    submit.TextColor3 = THEME.Text
+    submit.Font = Enum.Font.GothamBold
+    submit.TextSize = 15
+    submit.AutoButtonColor = false
+    submit.Parent = keyFrame
+    addCorner(submit, 6)
+    addStroke(submit, THEME.Sand, 1, 0.6)
+    wireButtonTweens(submit, THEME.Accent, THEME.AccentHover, THEME.AccentDown)
 
-	local status = Instance.new("TextLabel")
-	status.Size = UDim2.new(1, -24, 0, 24)
-	status.Position = UDim2.fromOffset(12, 46)
-	status.BackgroundTransparency = 1
-	status.Text = "Enter your key to continue"
-	status.TextColor3 = Color3.fromRGB(200, 200, 210)
-	status.Font = Enum.Font.Gotham
-	status.TextSize = 14
-	status.TextXAlignment = Enum.TextXAlignment.Left
-	status.Parent = keyFrame
+    -- Status label
+    local status = Instance.new("TextLabel")
+    status.Size = UDim2.new(1, -24, 0, 18)
+    status.Position = UDim2.fromOffset(12, 166)
+    status.BackgroundTransparency = 1
+    status.Text = ""
+    status.TextColor3 = THEME.Bad
+    status.Font = Enum.Font.Gotham
+    status.TextSize = 13
+    status.TextXAlignment = Enum.TextXAlignment.Left
+    status.Parent = keyFrame
 
-	local box = Instance.new("TextBox")
-	box.Size = UDim2.new(1, -24, 0, 38)
-	box.Position = UDim2.fromOffset(12, 78)
-	box.BackgroundColor3 = Color3.fromRGB(45, 45, 52)
-	box.PlaceholderText = "Paste key here..."
-	box.Text = ""
-	box.TextColor3 = Color3.fromRGB(255, 255, 255)
-	box.PlaceholderColor3 = Color3.fromRGB(150, 150, 160)
-	box.Font = Enum.Font.Gotham
-	box.TextSize = 15
-	box.ClearTextOnFocus = false
-	box.Parent = keyFrame
+    submit.MouseButton1Click:Connect(function()
+        local enteredKey = keyBox.Text:gsub("^%s*(.-)%s*$", "%1") -- trim whitespace
+        local isValid = false
+        
+        for _, validKey in ipairs(VALID_KEYS) do
+            if enteredKey == validKey then
+                isValid = true
+                break
+            end
+        end
+        
+        if isValid then
+            status.TextColor3 = THEME.Good
+            status.Text = "✅ Valid key — loading…"
+            task.wait(0.4)
+            keyFrame:Destroy()
+            if onValid then onValid() end
+        else
+            status.TextColor3 = THEME.Bad
+            status.Text = "❌ Invalid key, try again."
+        end
+    end)
 
-	local boxCorner = Instance.new("UICorner")
-	boxCorner.CornerRadius = UDim.new(0, 6)
-	boxCorner.Parent = box
-
-	local submit = Instance.new("TextButton")
-	submit.Size = UDim2.new(1, -24, 0, 38)
-	submit.Position = UDim2.fromOffset(12, 126)
-	submit.BackgroundColor3 = Color3.fromRGB(88, 101, 242)
-	submit.Text = "Submit Key"
-	submit.TextColor3 = Color3.fromRGB(255, 255, 255)
-	submit.Font = Enum.Font.GothamMedium
-	submit.TextSize = 15
-	submit.AutoButtonColor = true
-	submit.Parent = keyFrame
-
-	local submitCorner = Instance.new("UICorner")
-	submitCorner.CornerRadius = UDim.new(0, 6)
-	submitCorner.Parent = submit
-
-	local function checkKey()
-		if box.Text == VALID_KEY then
-			status.Text = "Correct! Loading..."
-			status.TextColor3 = Color3.fromRGB(120, 220, 120)
-			task.wait(0.4)
-			keyFrame:Destroy()
-			buildMainUI()
-		else
-			status.Text = "Invalid key, try again"
-			status.TextColor3 = Color3.fromRGB(220, 90, 90)
-		end
-	end
-
-	submit.MouseButton1Click:Connect(checkKey)
-	box.FocusLost:Connect(function(enterPressed)
-		if enterPressed then checkKey() end
-	end)
-
-	makeDraggable(keyFrame, kBar)
+    makeDraggable(keyFrame, keyBar)
+    return keyFrame
 end
 
 -- ============================================================
--- START
+-- BOOT
 -- ============================================================
-buildKeyUI()
+buildKeyUI(function()
+    buildMainUI()
+end)
